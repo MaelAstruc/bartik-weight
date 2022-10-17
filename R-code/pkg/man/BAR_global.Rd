@@ -4,7 +4,9 @@
 \name{BAR_global}
 \alias{BAR_global}
 \title{BAR Canonical Bartik: "Global" Industry Growths}
-\format{An object of class \code{tbl_df} (inherits from \code{tbl}, \code{data.frame}) with 684 rows and 3 columns.}
+\format{
+An object of class \code{tbl_df} (inherits from \code{tbl}, \code{data.frame}) with 684 rows and 3 columns.
+}
 \source{
 \url{https://github.com/paulgp/bartik-weight}
 }

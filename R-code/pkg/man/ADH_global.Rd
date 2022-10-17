@@ -4,7 +4,9 @@
 \name{ADH_global}
 \alias{ADH_global}
 \title{ADH China Shock: "Global" Industry Growths}
-\format{An object of class \code{tbl_df} (inherits from \code{tbl}, \code{data.frame}) with 780 rows and 3 columns.}
+\format{
+An object of class \code{tbl_df} (inherits from \code{tbl}, \code{data.frame}) with 780 rows and 3 columns.
+}
 \source{
 \url{https://github.com/paulgp/bartik-weight}
 }

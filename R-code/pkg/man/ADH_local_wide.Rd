@@ -4,7 +4,9 @@
 \name{ADH_local_wide}
 \alias{ADH_local_wide}
 \title{ADH China Shock: Local Industry Shares in Wide Format}
-\format{An object of class \code{tbl_df} (inherits from \code{tbl}, \code{data.frame}) with 1444 rows and 782 columns.}
+\format{
+An object of class \code{tbl_df} (inherits from \code{tbl}, \code{data.frame}) with 1444 rows and 782 columns.
+}
 \source{
 \url{https://github.com/paulgp/bartik-weight}
 }

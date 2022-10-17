@@ -4,7 +4,9 @@
 \name{ADH_master}
 \alias{ADH_master}
 \title{ADH China Shock: Master Data}
-\format{An object of class \code{tbl_df} (inherits from \code{tbl}, \code{data.frame}) with 1444 rows and 20 columns.}
+\format{
+An object of class \code{tbl_df} (inherits from \code{tbl}, \code{data.frame}) with 1444 rows and 20 columns.
+}
 \source{
 \url{https://github.com/paulgp/bartik-weight}
 }

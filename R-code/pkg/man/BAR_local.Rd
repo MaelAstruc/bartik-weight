@@ -4,7 +4,9 @@
 \name{BAR_local}
 \alias{BAR_local}
 \title{BAR Canonical Bartik: Local Industry Shares}
-\format{An object of class \code{tbl_df} (inherits from \code{tbl}, \code{data.frame}) with 493848 rows and 5 columns.}
+\format{
+An object of class \code{tbl_df} (inherits from \code{tbl}, \code{data.frame}) with 493848 rows and 5 columns.
+}
 \source{
 \url{https://github.com/paulgp/bartik-weight}
 }
