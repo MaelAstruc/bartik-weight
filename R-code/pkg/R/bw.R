@@ -59,6 +59,9 @@
 #'
 #' @export
 bw = function(master, y, x, controls = NULL, weight = NULL, local, Z, global, G) {
+    # Checks
+    stopifnot(nrow(master) == nrow(local))
+    stopifnot(length(Z) == nrow(global))
 
     # Parsing the master file
     y = master[[y]]
@@ -66,9 +69,9 @@ bw = function(master, y, x, controls = NULL, weight = NULL, local, Z, global, G)
     n = length(x)
 
     if (is.null(weight)) {
-        weight = diag(n)
+        weight = rep(1, n)
     } else {
-        weight = diag(master[[weight]], n, n)
+        weight = master[[weight]]
     }
 
     if (is.null(controls)) {
@@ -88,5 +91,8 @@ bw = function(master, y, x, controls = NULL, weight = NULL, local, Z, global, G)
     alpha_beta = ComputeAlphaBeta(y, x, WW, weight, Z, G)
 
     # Return a tibble
-    tibble::as_tibble(cbind(global, alpha = alpha_beta[[1]], beta = alpha_beta[[2]]))
+    tibble::as_tibble(cbind(global,
+                            alpha = alpha_beta[[1]], beta = alpha_beta[[2]],
+                            gamma = alpha_beta[[3]], pi = alpha_beta[[4]])
+                      )
 }
