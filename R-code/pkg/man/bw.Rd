@@ -29,9 +29,14 @@ should be in \code{master}.}
 \item{G}{A string for the the overall industry growth rates.}
 }
 \value{
-A data frame built from \code{global} with two additional variables:
-\code{alpha} (the Rotemberg weights), and \code{beta} (the just-identified IV
-estimates).
+A tibble with K rows, a for each group, with :
+\itemize{
+\item the \code{global} dataset.
+\item one column or multiple \code{alpha} for the Rotemberg weights. If $T$ is larger than 1, the columns are named \verb{alpha_'t'} with \code{t} the names in @param G.
+\item one column \code{beta} for the just-identified IV estimated.
+\item one column \code{gamma} reduced form/intent-to-treat effect of the Bartik IV on Y.
+\item one column \code{pi} the first stage effect of the Bartik IV on X.
+}
 }
 \description{
 \code{bw()} estimates the Rotemberg weights for a Bartik "instrument" outlined in
@@ -45,14 +50,41 @@ and the overall industry growth rates (usually at the level of industry or
 industry-year). The outcome variable and the endogenous variable are at the
 level of location or location-year.
 
+Regarding the application in the economics of migration, the shock comes
+from the changes in the population of migrants, the shift. The share is the
+distribution of migrants, grouped by origin, across the locations in a
+previous period of reference.
+
 Because the key variables are at three different levels, \code{bw()} proceeds by
 taking three different datasets: (1) a main \code{master} data frame containing
 the dependent variable (\code{y}), the causal variable of interest (\code{x}), a set of
 control variables (\code{controls}), and the weighted variables (\code{weight}); (2) a
-\code{local} data frame containing the set of local industry shares (\code{Z}); and (3)
-a \code{global} data frame containing the overall industry growth rates (\code{G}). At
-the moment, it is necessary to transform the "local" dataset from long format
-to wide format.
+\code{local} data frame containing the shares (\code{Z}); and (3) a \code{global} data frame
+containing the shift (\code{G}). At the moment, it is necessary to transform the
+"local" dataset from long format to wide format.
+
+Given the dimensions:
+\itemize{
+\item N the number of observations
+\item L the number of localions
+\item K the number of groups
+\item T the number of periods
+}
+
+The dimensions of these datasets are :
+\itemize{
+\item \code{master} : N rows
+\item \code{local[Z]} : N rows and K columns
+\item \code{global[G]} : K rows and T columns
+}
+
+Be sure to match the \code{master} and \code{local} datasets rows beforehand and
+to match the order of the \code{local} dataset column with the \code{global} dataset
+rows.
+
+If the number of rows in the \code{local} dataset is different from N because
+your \code{master} dataset is not at the localion or location-industry level, you
+need to duplicate the \code{local} rows to match with the \code{master} rows.
 }
 \examples{
 library(bartik.weight)
