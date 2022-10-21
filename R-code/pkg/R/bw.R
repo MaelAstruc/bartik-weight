@@ -85,7 +85,7 @@ bw = function(master, y, x, controls = NULL, weight = NULL, local, Z, global, G)
     Z = as.matrix(local[Z])
 
     # Parsing the global file
-    G = global[[G]]
+    G = as.matrix(global[G])
 
     # Compute the Rotemberg weights (alpha) and the just-identified coefficients (beta)
     alpha_beta = ComputeAlphaBeta(y, x, WW, weight, Z, G)

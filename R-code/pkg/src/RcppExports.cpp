@@ -12,7 +12,7 @@ Rcpp::Rostream<false>& Rcpp::Rcerr = Rcpp::Rcpp_cerr_get();
 #endif
 
 // ComputeAlphaBeta
-List ComputeAlphaBeta(arma::vec y, arma::vec x, arma::mat WW, arma::vec weightVec, arma::mat Z, arma::vec G);
+List ComputeAlphaBeta(arma::vec y, arma::vec x, arma::mat WW, arma::vec weightVec, arma::mat Z, arma::mat G);
 RcppExport SEXP _bartik_weight_ComputeAlphaBeta(SEXP ySEXP, SEXP xSEXP, SEXP WWSEXP, SEXP weightVecSEXP, SEXP ZSEXP, SEXP GSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
@@ -22,7 +22,7 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< arma::mat >::type WW(WWSEXP);
     Rcpp::traits::input_parameter< arma::vec >::type weightVec(weightVecSEXP);
     Rcpp::traits::input_parameter< arma::mat >::type Z(ZSEXP);
-    Rcpp::traits::input_parameter< arma::vec >::type G(GSEXP);
+    Rcpp::traits::input_parameter< arma::mat >::type G(GSEXP);
     rcpp_result_gen = Rcpp::wrap(ComputeAlphaBeta(y, x, WW, weightVec, Z, G));
     return rcpp_result_gen;
 END_RCPP

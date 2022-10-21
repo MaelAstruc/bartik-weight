@@ -7,9 +7,13 @@ using namespace Rcpp;
 
 // [[Rcpp::export]]
 List ComputeAlphaBeta(arma::vec y, arma::vec x, arma::mat WW,
-                      arma::vec weightVec, arma::mat Z, arma::vec G) {
+                      arma::vec weightVec, arma::mat Z, arma::mat G) {
 
     int n = x.n_elem;
+
+    // This works if G has one column
+    // TO DO: loop over the columns of G to compute one Alpha by period
+    G = G.as_row().t();
 
     arma::mat weight = arma::diagmat(weightVec);
 
