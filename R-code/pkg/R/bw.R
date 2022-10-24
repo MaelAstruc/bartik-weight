@@ -102,6 +102,8 @@ bw = function(master, y, x, controls = NULL, weight = NULL, local, Z, global, G)
         weight = master[[weight]]
     }
 
+    weight = as.matrix(weight)
+
     if (is.null(controls)) {
         WW = matrix(1, n, 1)
     } else {
