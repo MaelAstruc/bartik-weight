@@ -1,0 +1,463 @@
+---
+title: "Benchmark bw C++ code"
+author: "Mael Astruc--Le Souder"
+date: "24/10/2022"
+output: html_document
+---
+
+```{r, include=FALSE}
+devtools::load_all()
+library(RcppArmadillo)
+library(dplyr)
+```
+
+
+## Intro
+
+This document keeps track of the changes in the bw function, especially the C++ optimisation. The `bench` package is used to compare the versions. The `bench::mark()` function automatically compares the results of the functions, to make sure that the results does not change across the versions.
+
+The R code of `bw()` will be mostly ignored because the heavy work is done inside the C++ code.
+
+## Disclaimer
+
+I am fairly new to C++ and Armadillo, (at the time of writting this, I started 4 days ago because this function was not working for me), so I obviously missed optimizations and probably misunderstood how some work.
+
+If you know how to improve it, do not hesitate to do so or reach out to me, I am always interested.
+
+Regarding the benchmarks, I did only the bare minimum to show the preogress on one example, doing one iteration at each step and 50 at the end to compare the final function to the baseline. This is obviously not enough but it is suffisant to show large improvements after an optimization.
+
+The dimensions of the data are:
+  - $N$ = 2166
+  - $K$ = 684
+  - $L$ = 722
+  - $T$ = 1
+  
+Ideally, we would like to generate different datasets with different dimension sizes to explore the evolution of the functions computational complexity.
+
+My rough guess is that the optimization I introduce mostly affect the $N$ dimension.
+
+Also, I don't know how to profile Rcpp functions and how to benchmark their memory usage, which is the main issue of the baseline function.
+
+## Prepare data
+
+We use the BAR example data which is a larger and more computationally intensive than the ADH example.
+
+First we prepare the data as @jjchern did.
+
+```{r}
+BAR_local %>%
+    dplyr::select(-sh_ind_) %>%
+    dplyr::mutate(ind = stringr::str_glue("t{year}_init_sh_ind_{ind}")) %>%
+    tidyr::spread(ind, init_sh_ind_, fill = 0) -> BAR_local2
+
+# Prepare variables in the master tibble
+index = c("czone", "year")
+y = "wage_ch"
+x = "emp_ch"
+weight = "pop1980"
+controls = setdiff(names(BAR_master), c(index, y, x, weight))
+
+# Prepare variables in the local tibble
+Z = setdiff(names(BAR_local2), c(index))
+
+# Prepare variables in the global tibble
+G = "nat_empl_ind_"
+```
+
+Then we rename the variables and prepare the data for the C++ function.
+
+```{r}
+# Parsing the master file
+y = BAR_master[[y]]
+x = BAR_master[[x]]
+n = length(y)
+
+if (is.null(weight)) {
+  weight = rep(1, n)
+} else {
+  weight = BAR_master[[weight]]
+}
+
+if (is.null(controls)) {
+  WW = matrix(1, n, 1)
+} else {
+  W = as.matrix(BAR_master[controls])
+  WW = cbind(W, matrix(1, n, 1))
+}
+
+# Parsing the local file
+Z = as.matrix(BAR_local2[Z])
+
+# Parsing the global file
+G = as.matrix(BAR_global[G])
+
+weight = matrix(weight)
+```
+
+We can note that there is already a difference with @jjchern original code because we keep the weights as a matrix with one column and modify it only in the C++ code.
+
+## Baseline version
+
+This version of the C++ function is the first one to support the multiple columns in `G` and the to return `Gamma` and `pi`. However, it is very similar in the style to the original code.
+
+```{Rcpp}
+// [[Rcpp::depends(RcppArmadillo)]]
+// [[Rcpp::plugins(cpp11)]]
+
+# include <RcppArmadillo.h>
+using namespace Rcpp;
+using namespace arma;
+
+//[[Rcpp::export]]
+List bw_base(vec y, vec x, mat WW, vec weightVec, mat Z, mat G) {
+    int n = x.n_elem;
+    int nrow_G = G.n_rows;
+    int ncol_G = G.n_cols;
+
+    mat weight = diagmat(weightVec);
+
+    mat I;
+    mat M_W = I.eye(n, n) - WW * inv_sympd(WW.t() * weight * WW) * WW.t() * weight;
+    
+    vec xx = M_W * x;
+    vec yy = M_W * y;
+    mat ZZ = M_W * Z;
+    
+    mat Alpha(nrow_G, ncol_G);
+    for (int i = 0; i < ncol_G; i++){
+        vec g = G.col(i);
+        Alpha.col(i) = (diagmat(g) * Z.t() * weight * xx) / as_scalar(g.t() * Z.t() * weight * xx);
+    }
+    vec Beta = (Z.t() * weight * yy) / (Z.t() * weight * xx);
+    vec Gamma = (Z.t() * weight * yy) / ((ZZ.t() % ZZ.t()) * weightVec);
+    vec pi = (ZZ.t() * weight * xx) / ((ZZ.t() % ZZ.t()) * weightVec);
+
+    return List::create(Alpha, Beta, Gamma, pi);
+}
+```
+
+## Optimisations
+
+### Avoid code repetition
+
+We first extract the computations done multiple times in the different computation.
+
+```{Rcpp}
+// [[Rcpp::depends(RcppArmadillo)]]
+// [[Rcpp::plugins(cpp11)]]
+
+# include <RcppArmadillo.h>
+using namespace Rcpp;
+using namespace arma;
+
+//[[Rcpp::export]]
+List bw_grouped(vec y, vec x, mat WW, vec weightVec, mat Z, mat G) {
+    int n = x.n_elem;
+    int nrow_G = G.n_rows;
+    int ncol_G = G.n_cols;
+
+    mat weight = diagmat(weightVec);
+    
+    mat I;
+    mat M_W = I.eye(n, n) - WW * inv_sympd(WW.t() * weight * WW) * WW.t() * weight;
+    
+    vec xx = M_W * x;
+    vec yy = M_W * y;
+    mat ZZ = M_W * Z;
+    
+    mat WZ = weight * Z;
+    
+    vec Zxx = WZ.t() * xx;
+    vec Zyy = WZ.t() * yy;
+    vec ZZZZ = (ZZ.t() % ZZ.t()) * weightVec;
+    
+    mat Alpha(nrow_G, ncol_G);
+    for (int i = 0; i < ncol_G; i++){
+        vec g = G.col(i);
+        Alpha.col(i) = (diagmat(g) * Zxx) / as_scalar(g.t() * Zxx);
+    }
+    
+    vec Beta = Zyy / Zxx;
+    vec Gamma = Zyy / ZZZZ;
+    vec pi = (ZZ.t() * weight * xx) / ZZZZ;
+
+    return List::create(Alpha, Beta, Gamma, pi);
+}
+```
+
+Now we can do our first comparison:
+
+```{r}
+bench::mark(
+    "baseline" = bw_base(y, x, WW, weight, Z, G),
+    "grouped" = bw_grouped(y, x, WW, weight, Z, G),
+    iterations = 1,
+    memory = TRUE
+) %>%
+  select(expression, median, mem_alloc, n_itr, total_time)
+```
+
+This new code creates a lot of copies, so it's slower. However, separating allows us to optimize some specific parts.
+
+### Avoid diagonal matrices
+
+In the issue #5, @jagman88 has an issue with the large diagonal matrix of weights created and recommend to use sparse matrices. Indeed, creating a `n \times n` matrix only to use the diagonal terms means that `n \times (n-1)` elements are used to store zeros.
+
+The sparse matrix will decrease the memory use but a simpler solution exists: element-wise multiplications. Instead of creating a diagonal matrix for matrix mutiplication, we keep the column matrix and multiply each column by the weights.
+
+For the diagonal matrix used to compute `M_W`, we cannot use this trick but we can use a sparse matrix.
+
+```{Rcpp}
+// [[Rcpp::depends(RcppArmadillo)]]
+// [[Rcpp::plugins(cpp11)]]
+
+# include <RcppArmadillo.h>
+using namespace Rcpp;
+using namespace arma;
+
+//[[Rcpp::export]]
+List bw_ew(vec y, vec x, mat WW, mat weight, mat Z, mat G) {
+    int n = x.n_elem;
+    int nrow_G = G.n_rows;
+    int ncol_G = G.n_cols;
+
+    mat WWW = WW.each_col() % weight;
+    
+    mat M_W = speye(n, n) - WW * inv_sympd(WWW.t() * WW) * WWW.t();
+    
+    vec xx = M_W * x;
+    vec yy = M_W * y;
+    mat ZZ = M_W * Z;
+    
+    mat WZ = Z.each_col() % weight;
+    mat WZZ = ZZ.each_col() % weight;
+    
+    vec Zxx = WZ.t() * xx;
+    vec Zyy = WZ.t() * yy;
+    vec ZZZZ = (ZZ.t() % ZZ.t()) * weight;
+    
+    mat Alpha(nrow_G, ncol_G);
+    for (int i = 0; i < ncol_G; i++){
+        vec g = G.col(i);
+        Alpha.col(i) = (g % Zxx) / as_scalar(g.t() * Zxx);
+    }
+    
+    vec Beta = Zyy / Zxx;
+    vec Gamma = Zyy / ZZZZ;
+    vec pi = (WZZ.t() * xx) / ZZZZ;
+
+    return List::create(Alpha, Beta, Gamma, pi);
+}
+```
+
+```{r}
+bench::mark(
+    "baseline" = bw_base(y, x, WW, weight, Z, G),
+    "element-wize" = bw_ew(y, x, WW, weight, Z, G),
+    iterations = 1,
+    memory = TRUE
+) %>%
+  select(expression, median, mem_alloc, n_itr, total_time)
+```
+
+On my computer, this divides the computation time by 2. However, we still create a lot of intermediary variables.
+
+### Taking a step back on the weights
+
+Taking a step back, we can remember our econometrics classes and simplify the computations by multiplying all the variables by the square root of the weights at the beginning of the code.
+
+One point to note is that `ZZZZ` was not multiplied element-wize by the weights but as a matrix product. Hence, we need to sum the rows of the result.
+
+```{Rcpp}
+// [[Rcpp::depends(RcppArmadillo)]]
+// [[Rcpp::plugins(cpp11)]]
+
+# include <RcppArmadillo.h>
+using namespace Rcpp;
+using namespace arma;
+
+//[[Rcpp::export]]
+List bw_preweight(vec y, vec x, mat WW, mat weight, mat Z, mat G) {
+    int n = x.n_elem;
+    int nrow_G = G.n_rows;
+    int ncol_G = G.n_cols;
+    
+    mat weightSQR = sqrt(weight);
+    
+    x.each_col() %= weightSQR;
+    y.each_col() %= weightSQR;
+    Z.each_col() %= weightSQR;
+    WW.each_col() %= weightSQR;
+
+    mat M_W = speye(n, n) - WW * inv_sympd(WW.t() * WW) * WW.t();
+    
+    vec xx = M_W * x;
+    vec yy = M_W * y;
+    mat ZZ = M_W * Z;
+    
+    vec Zxx = Z.t() * xx;
+    vec Zyy = Z.t() * yy;
+    
+    colvec ZZZZ = sum(ZZ.t() % ZZ.t(), 1);
+    
+    mat Alpha(nrow_G, ncol_G);
+    for (int i = 0; i < ncol_G; i++){
+        vec g = G.col(i);
+        Alpha.col(i) = (g % Zxx) / as_scalar(g.t() * Zxx);
+    }
+    
+    vec Beta = Zyy / Zxx;
+    vec Gamma = Zyy / ZZZZ;
+    vec pi = (ZZ.t() * xx) / ZZZZ;
+
+    return List::create(Alpha, Beta, Gamma, pi);
+}
+```
+
+```{r}
+bench::mark(
+    "element-wize" = bw_ew(y, x, WW, weight, Z, G),
+    "pre-weight" = bw_preweight(y, x, WW, weight, Z, G),
+    iterations = 1,
+    memory = TRUE
+) %>%
+  select(expression, median, mem_alloc, n_itr, total_time)
+```
+
+This improved a bit the computation time (~10% on my computer), but the most important part is how it simplifies the last trick.
+
+### Use the code of smarter people
+
+One bottleneck of this code is the computation of `M_W`, which requires the multiplication of large matrices to compute the orthogonal projection matrix of `WW`.
+
+There are articles on how to simplify this computation with more efficient algorithms but unfortunately this is beyond my scope. Moreover, this particular computation does not have easy implemented functions to compute it.
+
+However, we know that the matrix `M_W` is used to compute residuals and that many people worked on algorithms to optimize the computation of the classical $(X'X)^{-1} X'Y$. Hence, we can modify the computation to use the `solve(X, Y)` method from Armadillo.
+
+Also, now that we already integrated the weights, the code is quite straight forward.
+
+```{Rcpp}
+// [[Rcpp::depends(RcppArmadillo)]]
+// [[Rcpp::plugins(cpp11)]]
+
+# include <RcppArmadillo.h>
+using namespace Rcpp;
+using namespace arma;
+
+//[[Rcpp::export]]
+List bw_solve(vec y, vec x, mat WW, mat weightVec, mat Z, mat G) {
+    mat weightSQR = sqrt(weightVec);
+    
+    x.each_col() %= weightSQR;
+    y.each_col() %= weightSQR;
+    Z.each_col() %= weightSQR;
+    WW.each_col() %= weightSQR;
+
+    vec xx = x - WW * solve(WW, x);
+    vec yy = y - WW * solve(WW, y);
+    mat ZZ = Z - WW * solve(WW, Z);
+    
+    vec Zxx = Z.t() * xx;
+    vec Zyy = Z.t() * yy;
+    colvec ZZZZ = sum(ZZ.t() % ZZ.t(), 1);
+    
+    mat Alpha = G.each_col() % Zxx;
+    Alpha.each_row() /= Zxx.t() * G;
+    
+    vec Beta = Zyy / Zxx;
+    vec Gamma = Zyy / ZZZZ;
+    vec pi = (ZZ.t() * xx) / ZZZZ;
+
+    return List::create(Alpha, Beta, Gamma, pi);
+}
+```
+
+```{r}
+bench::mark(
+    "pre-weight" = bw_preweight(y, x, WW, weight, Z, G),
+    "solve" = bw_solve(y, x, WW, weight, Z, G),
+    iterations = 1,
+    memory = TRUE
+) %>%
+  select(expression, median, mem_alloc, n_itr, total_time)
+```
+
+This speeds up a lot the computation (~30% on my computer) and solve the second memory issue we had with the large matrices created when computing `M_W`.
+
+### Cleaning up memory
+
+Once I have done all of this, I don't see other optimization to do in the code. However, we can remove the variables once they are no longer needed to free a bit of RAM during the computation.
+
+```{Rcpp}
+// [[Rcpp::depends(RcppArmadillo)]]
+// [[Rcpp::plugins(cpp11)]]
+
+# include <RcppArmadillo.h>
+using namespace Rcpp;
+using namespace arma;
+
+//[[Rcpp::export]]
+List bw_clean(vec y, vec x, mat WW, mat weightVec, mat Z, mat G) {
+    mat weightSQR = sqrt(weightVec);
+    
+    x.each_col() %= weightSQR;
+    y.each_col() %= weightSQR;
+    Z.each_col() %= weightSQR;
+    WW.each_col() %= weightSQR;
+    weightSQR.reset();
+
+    vec xx = x - WW * solve(WW, x);
+    x.reset();
+    vec yy = y - WW * solve(WW, y);
+    y.reset();
+    mat ZZ = Z - WW * solve(WW, Z);
+    WW.reset();
+    
+    vec Zxx = Z.t() * xx;
+    vec Zyy = Z.t() * yy;
+    colvec ZZZZ = sum(ZZ.t() % ZZ.t(), 1);
+    
+    mat Alpha = G.each_col() % Zxx;
+    Alpha.each_row() /= Zxx.t() * G;
+    
+    vec Beta = Zyy / Zxx;
+    vec Gamma = Zyy / ZZZZ;
+    vec pi = (ZZ.t() * xx) / ZZZZ;
+
+    return List::create(Alpha, Beta, Gamma, pi);
+}
+```
+
+```{r}
+bench::mark(
+    "solve" = bw_solve(y, x, WW, weight, Z, G),
+    "clean" = bw_clean(y, x, WW, weight, Z, G),
+    iterations = 1,
+    memory = TRUE
+) %>%
+  select(expression, median, mem_alloc, n_itr, total_time)
+```
+
+The two functions are equivalent but I think this should be useful with large datasets.
+
+## Conclusion (for now)
+
+Comparing the baseline to the last version we have:
+
+```{r}
+bench::mark(
+    "baseline" = bw_base(y, x, WW, weight, Z, G),
+    "clean" = bw_clean(y, x, WW, weight, Z, G),
+    iterations = 50,
+    memory = TRUE
+) %>%
+  select(expression, median, mem_alloc, n_itr, total_time)
+```
+
+These different optimization allows to divide the computation time by 2.3 and diminish the memory needed for these computations.
+
+Avoiding the diagonal matrices and using the `solve(X, Y)` method are a big improvement when $N$ is large and save a lot of memory.
+
+In my personal project, I have $N$ = 1.6M, $K$ = 188, $L$ = 165 and $T$ = 13. With $N$ = 5,775, the baseline took 36.59s, while the last version took 9.16s. With $N$ = 1,634,924, the baseline crashes due to the lack of memory, while the last version took 49.1s.
+
+One other simple example, the tests now take 15s instead of 25s for ADH and BAR.
