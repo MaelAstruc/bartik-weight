@@ -8,6 +8,8 @@ test_that("bw still gives the same output with ADH example", {
         dplyr::mutate(ind = stringr::str_glue("t{year}_sh_ind_{ind}")) %>%
         tidyr::spread(ind, sh_ind_, fill = 0) -> ADH_local2
 
+    # Prepare variables in the master tibble
+    index = c("czone", "year")
     y = "d_sh_empl_mfg"
     x = "d_tradeusch_pw"
 
@@ -19,13 +21,15 @@ test_that("bw still gives the same output with ADH example", {
     weight = "timepwt48"
 
     # Prepare variables in the local tibble
-    Z = setdiff(names(ADH_local_wide), c("czone", "year"))
+    Z = setdiff(names(ADH_local_wide), index)
 
     # Prepare variables in the global tibble
     G = "trade_"
 
     # Estimate the weight (alpha) and the IV estimates (beta)
-    bw_ADH_test = bw(ADH_master, y, x, controls, weight, ADH_local2, Z, ADH_global, G)
+    bw_ADH_test = bw(ADH_master, y, x, controls, weight,
+                     ADH_local2, Z, ADH_global, G,
+                     L_id = index, T_id = NULL)
 
     expect_equal(bw_ADH_test[, ref_cols], bw_ADH_ref)
 })
@@ -54,7 +58,9 @@ test_that("bw still gives the same output with BAR example", {
     G = "nat_empl_ind_"
 
     # Estimate the weight (alpha) and the IV estimates (beta)
-    bw_BAR_test = bw(BAR_master, y, x, controls, weight, BAR_local2, Z, BAR_global, G)
+    bw_BAR_test = bw(BAR_master, y, x, controls, weight,
+                     BAR_local2, Z, BAR_global, G,
+                     L_id = index, T_id = NULL)
 
     expect_equal(bw_BAR_test[, ref_cols], bw_BAR_ref)
 })

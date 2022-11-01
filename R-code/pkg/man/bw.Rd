@@ -4,7 +4,19 @@
 \alias{bw}
 \title{Estimating Rotemberg Weights for a Bartik "Instrument"}
 \usage{
-bw(master, y, x, controls = NULL, weight = NULL, local, Z, global, G)
+bw(
+  master,
+  y,
+  x,
+  controls = NULL,
+  weight = NULL,
+  local,
+  z,
+  global,
+  g,
+  L_id,
+  T_id = NULL
+)
 }
 \arguments{
 \item{master}{The master data frame.}
@@ -22,17 +34,23 @@ should be in \code{master}.}
 
 \item{local}{The local data frame. It should be in wide format.}
 
-\item{Z}{A string or character vector for the the local industry shares.}
+\item{z}{The variables used in the local data frame.}
 
 \item{global}{The global data frame.}
 
-\item{G}{A string for the the overall industry growth rates.}
+\item{g}{The variables used in the global data frame.}
+
+\item{L_id}{The indexes used to identify and match the locations in the
+master and local data frames.}
+
+\item{T_id}{The indexes used to identify and match the periods in the master
+and global data frames.}
 }
 \value{
 A tibble with K rows, a for each group, with :
 \itemize{
 \item the \code{global} dataset.
-\item one column or multiple \code{alpha} for the Rotemberg weights. If $T$ is larger than 1, the columns are named \verb{alpha_'t'} with \code{t} the names in @param G.
+\item one column \code{alpha} for the Rotemberg weights.
 \item one column \code{beta} for the just-identified IV estimated.
 \item one column \code{gamma} reduced form/intent-to-treat effect of the Bartik IV on Y.
 \item one column \code{pi} the first stage effect of the Bartik IV on X.
@@ -66,7 +84,7 @@ containing the shift (\code{G}). At the moment, it is necessary to transform the
 Given the dimensions:
 \itemize{
 \item N the number of observations
-\item L the number of localions
+\item L the number of locations
 \item K the number of groups
 \item T the number of periods
 }
@@ -74,17 +92,9 @@ Given the dimensions:
 The dimensions of these datasets are :
 \itemize{
 \item \code{master} : N rows
-\item \code{local[Z]} : N rows and K columns
+\item \code{local[Z]} : L rows and K columns
 \item \code{global[G]} : K rows and T columns
 }
-
-Be sure to match the \code{master} and \code{local} datasets rows beforehand and
-to match the order of the \code{local} dataset column with the \code{global} dataset
-rows.
-
-If the number of rows in the \code{local} dataset is different from N because
-your \code{master} dataset is not at the localion or location-industry level, you
-need to duplicate the \code{local} rows to match with the \code{master} rows.
 }
 \examples{
 library(bartik.weight)
@@ -100,6 +110,7 @@ weight = "timepwt48"
 Z = setdiff(names(ADH_local_wide), index)
 G = "trade_"
 
-bw(ADH_master, y, x, controls, weight, ADH_local_wide, Z, ADH_global, G)
-
+bw(ADH_master, y, x, controls, weight,
+   ADH_local_wide, Z, ADH_global, G,
+   L_id = index, T_id = NULL)
 }

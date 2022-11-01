@@ -25,24 +25,17 @@
 #'
 #' Given the dimensions:
 #' - N the number of observations
-#' - L the number of localions
+#' - L the number of locations
 #' - K the number of groups
 #' - T the number of periods
 #'
 #' The dimensions of these datasets are :
 #' - `master` : N rows
-#' - `local[Z]` : N rows and K columns
+#' - `local[Z]` : L rows and K columns
 #' - `global[G]` : K rows and T columns
 #'
-#' Be sure to match the `master` and `local` datasets rows beforehand and
-#' to match the order of the `local` dataset column with the `global` dataset
-#' rows.
-#'
-#' If the number of rows in the `local` dataset is different from N because
-#' your `master` dataset is not at the localion or location-industry level, you
-#' need to duplicate the `local` rows to match with the `master` rows.
-#'
 #' @md
+#'
 #' @param master The master data frame.
 #' @param y A string for outcome variable. It should be a variable in `master`.
 #' @param x A string for the endogenous variable. It should be a variable in
@@ -52,22 +45,24 @@
 #' @param weight A string for the weighted variable. `weight` is optional and
 #'   should be in `master`.
 #' @param local The local data frame. It should be in wide format.
-#' @param Z A string or character vector for the the local industry shares.
+#' @param z The variables used in the local data frame.
 #' @param global The global data frame.
-#' @param G A string for the the overall industry growth rates.
+#' @param g The variables used in the global data frame.
+#' @param L_id The indexes used to identify and match the locations in the
+#'   master and local data frames.
+#' @param T_id The indexes used to identify and match the periods in the master
+#'   and global data frames.
 #'
 #' @return A tibble with K rows, a for each group, with :
 #' \itemize{
 #'   \item the `global` dataset.
-#'   \item one column or multiple `alpha` for the Rotemberg weights. If $T$ is larger than 1, the columns are named `alpha_'t'` with `t` the names in @param G.
+#'   \item one column `alpha` for the Rotemberg weights.
 #'   \item one column `beta` for the just-identified IV estimated.
 #'   \item one column `gamma` reduced form/intent-to-treat effect of the Bartik IV on Y.
 #'   \item one column `pi` the first stage effect of the Bartik IV on X.
 #' }
 #'
 #' @importFrom tibble as_tibble
-#' @importFrom Rcpp sourceCpp
-#' @useDynLib bartik.weight, .registration = TRUE
 #'
 #' @examples
 #' library(bartik.weight)
@@ -83,26 +78,22 @@
 #' Z = setdiff(names(ADH_local_wide), index)
 #' G = "trade_"
 #'
-#' bw(ADH_master, y, x, controls, weight, ADH_local_wide, Z, ADH_global, G)
-#'
+#' bw(ADH_master, y, x, controls, weight,
+#'    ADH_local_wide, Z, ADH_global, G,
+#'    L_id = index, T_id = NULL)
 #' @export
-bw = function(master, y, x, controls = NULL, weight = NULL, local, Z, global, G) {
-    # Checks
-    stopifnot(nrow(master) == nrow(local))
-    stopifnot(length(Z) == nrow(global))
-
+bw <- function(master, y, x, controls = NULL, weight = NULL,
+              local, z, global, g, L_id, T_id = NULL) {
     # Parsing the master file
-    y = master[[y]]
-    x = master[[x]]
-    n = length(x)
+    Y = as.matrix(master[y])
+    X = as.matrix(master[x])
+    n = nrow(Y)
 
     if (is.null(weight)) {
-        weight = rep(1, n)
+        weight = as.matrix(rep(1, n))
     } else {
-        weight = master[[weight]]
+        weight = as.matrix(master[weight])
     }
-
-    weight = as.matrix(weight)
 
     if (is.null(controls)) {
         WW = matrix(1, n, 1)
@@ -111,26 +102,100 @@ bw = function(master, y, x, controls = NULL, weight = NULL, local, Z, global, G)
         WW = cbind(W, matrix(1, n, 1))
     }
 
-    # Parsing the local file
-    Z = as.matrix(local[Z])
+    # Match the data, local and global matrices
+    matched_matrices <- match_matrices(master, local, global, z, g, L_id, T_id)
 
-    # Parsing the global file
-    G = as.matrix(global[G])
+    Z_matched <- matched_matrices[["Z"]]
+    B <- matched_matrices[["B"]]
+    Bk <- matched_matrices[["Bk"]]
 
-    # Compute the Rotemberg weights (alpha) and the just-identified coefficients (beta)
-    alpha_beta = ComputeAlphaBeta(y, x, WW, weight, Z, G)
-
-    # Prepare matrice of alphas
-    alphas = alpha_beta[[1]]
-    if (ncol(alphas) == 1) {
-        colnames(alphas) <- "alpha"
-    } else {
-        colnames(alphas) <- paste0("alpha_", colnames(G))
-    }
+    # Compute the coefficients by groups
+    alpha_beta = ComputeAlphaBeta(Y, X, WW, weight, Z_matched, B, Bk)
 
     # Return a tibble
-    tibble::as_tibble(cbind(global, alphas,
-                            beta = alpha_beta[[2]],
+    tibble::as_tibble(cbind(global,
+                            alpha = alpha_beta[[1]], beta = alpha_beta[[2]],
                             gamma = alpha_beta[[3]], pi = alpha_beta[[4]])
-                      )
+    )
+}
+
+match_matrices <- function(data, local, global, z, g, L_id, T_id = NULL) {
+    stopifnot(length(g) == 1 || !is.null(T_id))
+
+    # Create Z and G matrices
+    Z <- as.matrix(local[z])
+    G <- as.matrix(global[g])
+
+    # Create locations ids by observation
+    data_L_index <- Reduce(paste0, data[L_id])
+    rownames(Z) <- Reduce(paste0, local[L_id])
+
+    # Identify the observations in the data by ids and periods
+    data_T_index <- Reduce(paste0, data[T_id])
+    if(ncol(G) == 1) data_LT_index <- paste0(data_L_index, colnames(G))
+    else data_LT_index <- paste0(data_L_index, data_T_index)
+
+    # In case these are numeric
+    data_L_index <- as.character(data_L_index)
+    data_LT_index <- as.character(data_LT_index)
+
+    # Create all the possible ids L*T
+    names_lt <- expand.grid(rownames(Z), colnames(G))
+    names_lt <- paste0(names_lt[[1]], names_lt[[2]])
+
+    # Match Z with data observations locations
+    Z_matched <- Z[data_L_index, ]
+    Z_matched <- as.matrix(Z_matched)
+
+    # Row wise multiplication Z % G
+    Bk_vec <- list()
+    for (i in 1:ncol(G)) Bk_vec[[i]] <- G[, i] * t(Z)
+    Bk_vec <- Reduce(cbind, Bk_vec) # dimension (K x L*T)
+    colnames(Bk_vec) <- names_lt
+    Bk_vec <- Bk_vec[, data_LT_index] # Reorder columns to match the data
+    Bk_vec <- as.matrix(Bk_vec)
+
+    # Matrix multiplication Z * G
+    B_vec <- Z %*% G
+    B_vec <- as.matrix(c(B_vec)) # dimension (L*T x 1)
+    rownames(B_vec) <- names_lt
+    B_vec <- B_vec[data_LT_index, ] # Reorder columns to match the data
+    B_vec <- as.matrix(B_vec)
+
+    list(B = B_vec, Bk = Bk_vec, Z = Z_matched)
+}
+
+ComputeAlphaBeta <- function(y, x, WW, weight, Z, B, Bk) {
+    weightSQR = sqrt(weight)
+
+    for (i in 1:ncol(x)) x[, i] = x[, i] * weightSQR
+    for (i in 1:ncol(y)) y[, i] = y[, i] * weightSQR
+    for (i in 1:ncol(Z)) Z[, i] = Z[, i] * weightSQR
+    for (i in 1:ncol(WW)) WW[, i] = WW[, i] * weightSQR
+    for (i in 1:ncol(B)) B[, i] = B[, i] * weightSQR
+    for (i in 1:nrow(Bk)) Bk[i, ] = Bk[i, ] * weightSQR
+    rm(weightSQR)
+
+    xx = x - WW %*% qr.solve(WW, x)
+    rm(x)
+    yy = y - WW %*% qr.solve(WW, y)
+    rm(y)
+    ZZ = Z - WW %*% qr.solve(WW, Z)
+    rm(WW)
+
+    Zxx = crossprod(Z, xx)
+    Zyy = crossprod(Z, yy)
+    ZZZZ = rowSums(t(ZZ) * t(ZZ))
+
+    Alpha = (Bk %*% xx) / as.numeric(crossprod(B, xx))
+    Beta = Zyy / Zxx
+    Gamma = Zyy / ZZZZ
+    pi = crossprod(ZZ, xx) / ZZZZ
+
+    attributes(Alpha)[["dimnames"]] <- NULL
+    attributes(Beta)[["dimnames"]] <- NULL
+    attributes(Gamma)[["dimnames"]] <- NULL
+    attributes(pi)[["dimnames"]] <- NULL
+
+    list(Alpha, Beta, Gamma, pi)
 }

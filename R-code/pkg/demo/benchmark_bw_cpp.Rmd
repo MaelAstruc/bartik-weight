@@ -68,9 +68,9 @@ Then we rename the variables and prepare the data for the C++ function.
 
 ```{r}
 # Parsing the master file
-y = BAR_master[[y]]
-x = BAR_master[[x]]
-n = length(y)
+y = as.matrix(BAR_master[y])
+x = as.matrix(BAR_master[x])
+n = nrow(y)
 
 if (is.null(weight)) {
   weight = rep(1, n)
@@ -203,7 +203,7 @@ This new code creates a lot of copies, so it's slower. However, separating allow
 
 In the issue #5, @jagman88 has an issue with the large diagonal matrix of weights created and recommend to use sparse matrices. Indeed, creating a `n \times n` matrix only to use the diagonal terms means that `n \times (n-1)` elements are used to store zeros.
 
-The sparse matrix will decrease the memory use but a simpler solution exists: element-wise multiplications. Instead of creating a diagonal matrix for matrix mutiplication, we keep the column matrix and multiply each column by the weights.
+The sparse matrix will decrease the memory use but a simpler solution exists: element-wise multiplications. Instead of creating a diagonal matrix for matrix multiplication, we keep the column matrix and multiply each column by the weights.
 
 For the diagonal matrix used to compute `M_W`, we cannot use this trick but we can use a sparse matrix.
 
@@ -260,7 +260,7 @@ bench::mark(
   select(expression, median, mem_alloc, n_itr, total_time)
 ```
 
-On my computer, this divides the computation time by 2. However, we still create a lot of intermediary variables.
+On my computer, this divides the computation time by ~2. However, we still create a lot of intermediary variables.
 
 ### Taking a step back on the weights
 
@@ -440,21 +440,639 @@ bench::mark(
 
 The two functions are equivalent but I think this should be useful with large datasets.
 
-## Conclusion (for now)
+## Correct the issue
 
-Comparing the baseline to the last version we have:
+Now that I have optimized this code we can not that the original code is broken. We match each observation with $T$ coefficients when we do $Z * G$ of dimension $(L \times T)$. We need to vectorize the estimated coefficients and match it with each individuals depending on the location an the period.
+
+This issue also arises when we multiply $x$ or $y$ by $Z$.
+
+The first thing to point is that I don't know how to match the matrices rows with another matrix.
+
+This is why I will do this part on R, ignoring the data preparation part.
+
+### Rewrite in pure R
+
+```{r}
+bw_R <- function(y, x, WW, weight, Z, G) {
+    weightSQR = sqrt(weight)
+    
+    for (i in 1:ncol(x)) x[, i] = x[, i] * weightSQR
+    for (i in 1:ncol(y)) y[, i] = y[, i] * weightSQR
+    for (i in 1:ncol(Z)) Z[, i] = Z[, i] * weightSQR
+    for (i in 1:ncol(WW)) WW[, i] = WW[, i] * weightSQR
+    rm(weightSQR)
+    
+    xx = x - WW %*% qr.solve(WW, x)
+    rm(x)
+    yy = y - WW %*% qr.solve(WW, y)
+    rm(y)
+    ZZ = Z - WW %*% qr.solve(WW, Z)
+    rm(WW)
+    
+    Zxx = crossprod(Z, xx)
+    Zyy = crossprod(Z, yy)
+    ZZZZ = rowSums(t(ZZ) * t(ZZ))
+    
+    Alpha = matrix(nrow = nrow(G), ncol = ncol(G))
+    for (i in 1:ncol(G)) Alpha[, i] = (G[, i] * Zxx) / as.numeric(crossprod(G[, i], Zxx))
+    
+    Beta = Zyy / Zxx
+    Gamma = Zyy / ZZZZ
+    pi = crossprod(ZZ, xx) / ZZZZ
+
+    attributes(Alpha)[["dimnames"]] <- NULL
+    attributes(Beta)[["dimnames"]] <- NULL
+    attributes(Gamma)[["dimnames"]] <- NULL
+    attributes(pi)[["dimnames"]] <- NULL
+    
+    list(Alpha, Beta, Gamma, pi)
+}
+```
 
 ```{r}
 bench::mark(
-    "baseline" = bw_base(y, x, WW, weight, Z, G),
     "clean" = bw_clean(y, x, WW, weight, Z, G),
-    iterations = 50,
+    "R" = bw_R(y, x, WW, weight, Z, G),
+    iterations = 1,
     memory = TRUE
 ) %>%
   select(expression, median, mem_alloc, n_itr, total_time)
 ```
 
-These different optimization allows to divide the computation time by 2.3 and diminish the memory needed for these computations.
+Using R with the same tricks as before, we find similar computation times. We cannot compare the memory usage because `bench::mark()` doesn't capture the memory usage within the C++ function.
+
+### Fixe the matching issue
+
+Now we can work on our issues:
+* The result of $Z * G$ of dimension $(L \times T)$ should be vectorized in a single column matrix of dimension $(L*T \times 1)$ and then matched by location and period with the observations.
+* The matrix $Z$ of dimension $(L \times K)$ should be matched by location with the observations.
+
+To match the data and the matrices, we need ids which identify these dimensions.
+
+```{r}
+bw_matching <- function(data, local, global, z, g, L_id, T_id = NULL) {
+    # Create Z and G matrices
+    Z <- as.matrix(local[z])
+    G <- as.matrix(global[g])
+    
+    # Create observations ids
+    data[[".id"]] <- Reduce(paste0, data[L_id])
+    rownames(Z) <- Reduce(paste0, local[L_id])
+    
+    # Identify the observations in the data
+    data_L_index <- data[[".id"]]
+    data_LT_index <- paste0(data[[".id"]], data[[T_id]])
+    
+    # Create all the possible ids L*T
+    names_lt <- expand.grid(rownames(Z), colnames(G))
+    names_lt <- paste0(names_lt[[1]], names_lt[[2]])
+
+    # Match Z with data observations locations
+    Z_matched <- Z[data_L_index, ]
+    
+    # Row wise multiplication Z % G
+    Bk_vec <- list()
+    for (i in 1:ncol(G)) Bk_vec[[i]] <- G[, i] * t(z)
+    Bk_vec <- Reduce(cbind, Bk_vec) # dimension (K x L*T)
+    colnames(Bk_vec) <- names_lt
+    Bk_vec <- Bk_vec[, data_LT_index] # Reorder columns to match the data
+    
+    # Matrix multiplication Z * G
+    B_vec <- G %*% t(Z)
+    B_vec <- as.matrix(c(B_vec)) # dimension (L*T x 1)
+    rownames(B_vec) <- names_lt
+    B_vec <- B_vec[data_LT_index, ] # Reorder columns to match the data
+    
+    list(B_vec = B_vec, Bk = Bk_vec, Z = Z_matched)
+}
+```
+
+This function takes as arguments data, Z and G and uses the indexes provided for the three dimensions L, K and T to match the estimates to the observations.
+
+We need to adapt this function in case there is only one period ($T$ = 1).
+
+```{r}
+bw_matching2 <- function(data, local, global, z, g, L_id, T_id = NULL) {
+    stopifnot(length(g) == 1 || !is.null(T_id))
+    
+    # Create Z and G matrices
+    Z <- as.matrix(local[z])
+    G <- as.matrix(global[g])
+    
+    # Create observations ids by observation ids
+    data_L_index <- Reduce(paste0, data[L_id])
+    rownames(Z) <- Reduce(paste0, local[L_id])
+    
+    # Identify the observations in the data by ids and periods
+    if(ncol(G) == 1) data_LT_index <- paste0(data_L_index, colnames(G))
+    else data_LT_index <- data_L_index
+    
+    # Create all the possible ids L*T
+    names_lt <- expand.grid(rownames(Z), colnames(G))
+    names_lt <- paste0(names_lt[[1]], names_lt[[2]])
+
+    # Match Z with data observations locations
+    Z_matched <- Z[data_L_index, ]
+    Z_matched <- as.matrix(Z_matched)
+    
+    # Row wise multiplication Z % G
+    Bk_vec <- list()
+    for (i in 1:ncol(G)) Bk_vec[[i]] <- G[, i] * t(Z)
+    Bk_vec <- Reduce(cbind, Bk_vec) # dimension (K x L*T)
+    colnames(Bk_vec) <- names_lt
+    Bk_vec <- Bk_vec[, data_LT_index] # Reorder columns to match the data
+    Bk_vec <- as.matrix(Bk_vec)
+    
+    # Matrix multiplication Z * G
+    B_vec <- Z %*% G
+    B_vec <- as.matrix(c(B_vec)) # dimension (L*T x 1)
+    rownames(B_vec) <- names_lt
+    B_vec <- B_vec[data_LT_index, ] # Reorder columns to match the data
+    B_vec <- as.matrix(B_vec)
+    
+    list(B = B_vec, Bk = Bk_vec, Z = Z_matched)
+}
+```
+
+Let's test it and save the matched data.
+
+```{r}
+# Here we have T = 1
+matched_matrices <- bw_matching2(BAR_master, BAR_local2, BAR_global,
+                                 z = setdiff(names(BAR_local2), c(index)),
+                                 g = "nat_empl_ind_",
+                                 L_id = c(index),
+                                 T_id = NULL)
+
+B <- matched_matrices[["B"]]
+Bk <- matched_matrices[["Bk"]]
+Z_matched <- matched_matrices[["Z"]]
+```
+
+
+### Rewrite the computation function
+
+Now that we have these new matrices, we need to include them in the computations.
+
+```{r}
+bw_R_matched <- function(y, x, WW, weight, Z_matched, B, Bk) {
+    weightSQR = sqrt(weight)
+    
+    for (i in 1:ncol(x)) x[, i] = x[, i] * weightSQR
+    for (i in 1:ncol(y)) y[, i] = y[, i] * weightSQR
+    for (i in 1:ncol(Z_matched)) Z_matched[, i] = Z_matched[, i] * weightSQR
+    for (i in 1:ncol(WW)) WW[, i] = WW[, i] * weightSQR
+    rm(weightSQR)
+    
+    xx = x - WW %*% qr.solve(WW, x)
+    rm(x)
+    yy = y - WW %*% qr.solve(WW, y)
+    rm(y)
+    ZZ = Z_matched - WW %*% qr.solve(WW, Z_matched)
+    rm(WW)
+    
+    Zxx = crossprod(Z_matched, xx)
+    Zyy = crossprod(Z_matched, yy)
+    ZZZZ = rowSums(t(ZZ) * t(ZZ))
+    
+    Alpha = (Bk %*% xx) / as.numeric(crossprod(B, xx))
+    Beta = Zyy / Zxx
+    Gamma = Zyy / ZZZZ
+    pi = crossprod(ZZ, xx) / ZZZZ
+
+    attributes(Alpha)[["dimnames"]] <- NULL
+    attributes(Beta)[["dimnames"]] <- NULL
+    attributes(Gamma)[["dimnames"]] <- NULL
+    attributes(pi)[["dimnames"]] <- NULL
+    
+    list(Alpha, Beta, Gamma, pi)
+}
+```
+
+Because there is only 1 column in $G$, we can still compare the alphas.
+
+```{r}
+bench::mark(
+    "R" = bw_R(y, x, WW, weight, Z, G),
+    "R_matched" = bw_R_matched(y, x, WW, weight, Z_matched, B, Bk),
+    iterations = 1,
+    memory = TRUE
+) %>%
+  select(expression, median, mem_alloc, n_itr, total_time)
+```
+The function works and is as fast as the previous C++ and R ones. However, the comparison might be unfaire because a part of the operations are left in the matching function.
+
+In the next section I will compare the wrapped functions.
+
+### Rewrite bw() R function
+
+First, we use the original wrapper with the optimized R functions.
+
+```{r}
+bw_wrapper_broken <- function(master, y, x, controls = NULL, weight = NULL,
+                              local, Z, global, G) {
+    # Parsing the master file
+    y = as.matrix(master[y])
+    x = as.matrix(master[x])
+    n = nrow(y)
+    
+    if (is.null(weight)) {
+      weight = as.matrix(rep(1, n))
+    } else {
+      weight = as.matrix(master[weight])
+    }
+    
+    if (is.null(controls)) {
+      WW = matrix(1, n, 1)
+    } else {
+      W = as.matrix(master[controls])
+      WW = cbind(W, matrix(1, n, 1))
+    }
+    
+    # Parsing the local file
+    Z = as.matrix(local[Z])
+    
+    # Parsing the global file
+    G = as.matrix(global[G])
+
+    # Compute the Rotemberg weights (alpha) and the just-identified coefficients (beta)
+    alpha_beta = bw_R(y, x, WW, weight, Z, G)
+
+    # Prepare matrice of alphas
+    alphas = alpha_beta[[1]]
+    if (ncol(alphas) == 1) {
+        colnames(alphas) <- "alpha"
+    } else {
+        colnames(alphas) <- paste0("alpha_", colnames(G))
+    }
+
+    # Return a tibble
+    tibble::as_tibble(cbind(global, alphas,
+                            beta = alpha_beta[[2]],
+                            gamma = alpha_beta[[3]], pi = alpha_beta[[4]])
+                      )
+}
+```
+
+We can see that I expected multiples weights per individual, one for each period. This would mean that one individual in one period might have weights for the other periods, which doesn't make sense.
+
+Then we can create a wrapper where we match the periods.
+
+```{r}
+bw_wrapper_fixed <- function(master, y, x, controls = NULL, weight = NULL,
+                             local, z, global, g, L_id, T_id = NULL) {
+    # Parsing the master file
+    Y = as.matrix(master[y])
+    X = as.matrix(master[x])
+    n = nrow(Y)
+    
+    if (is.null(weight)) {
+      weight = as.matrix(rep(1, n))
+    } else {
+      weight = as.matrix(master[weight])
+    }
+    
+    if (is.null(controls)) {
+      WW = matrix(1, n, 1)
+    } else {
+      W = as.matrix(master[controls])
+      WW = cbind(W, matrix(1, n, 1))
+    }
+    
+    # Match the data, local and global matrices
+    matched_matrices <- bw_matching2(master, local, global, z, g, L_id, T_id)
+    
+    Z_matched <- matched_matrices[["Z"]]
+    B <- matched_matrices[["B"]]
+    Bk <- matched_matrices[["Bk"]]
+
+    # Compute the Rotemberg weights (alpha) and the just-identified coefficients (beta)
+    alpha_beta = bw_R_matched(Y, X, WW, weight, Z_matched, B, Bk)
+
+    # Return a tibble
+    tibble::as_tibble(cbind(global,
+                            alpha = alpha_beta[[1]], beta = alpha_beta[[2]],
+                            gamma = alpha_beta[[3]], pi = alpha_beta[[4]])
+                      )
+}
+```
+
+Now let's charge the data and compare the functions once they are wrapped.
+
+```{r}
+BAR_local %>%
+    dplyr::select(-sh_ind_) %>%
+    dplyr::mutate(ind = stringr::str_glue("t{year}_init_sh_ind_{ind}")) %>%
+    tidyr::spread(ind, init_sh_ind_, fill = 0) -> BAR_local2
+
+# Prepare variables in the master tibble
+index = c("czone", "year")
+y = "wage_ch"
+x = "emp_ch"
+weight = "pop1980"
+controls = setdiff(names(BAR_master), c(index, y, x, weight))
+
+# Prepare variables in the local tibble
+Z = setdiff(names(BAR_local2), c(index))
+
+# Prepare variables in the global tibble
+G = "nat_empl_ind_"
+
+L_id = index
+T_id = NULL
+```
+
+Now we can compare the whole functions.
+
+```{r}
+bench::mark(
+    "broken" = bw_wrapper_broken(BAR_master, y, x, controls, weight,
+                                 BAR_local2, Z, BAR_global, G),
+    "fixed" = bw_wrapper_fixed(BAR_master, y, x, controls, weight,
+                               BAR_local2, Z, BAR_global, G, L_id, T_id),
+    check = FALSE,
+    iterations = 1,
+    memory = TRUE
+) %>%
+  select(expression, median, mem_alloc, n_itr, total_time)
+```
+
+On my computer the results are similar in terms of computation time but with a larger memory allocation for the new version. This makes sense because we need to save the matched matrices.
+
+### Use Matrix package
+
+The `Matrix` package might improve the computation time.
+
+```{r}
+bw_matching_Matrix <- function(data, local, global, z, g, L_id, T_id = NULL) {
+    stopifnot(length(g) == 1 || !is.null(T_id))
+    
+    # Create Z and G matrices
+    Z <- Matrix::Matrix(as.matrix(local[z]))
+    G <- Matrix::Matrix(as.matrix(global[g]))
+    
+    # Create observations ids by observation ids
+    data_L_index <- Reduce(paste0, data[L_id])
+    rownames(Z) <- Reduce(paste0, local[L_id])
+    
+    # Identify the observations in the data by ids and periods
+    if(ncol(G) == 1) data_LT_index <- paste0(data_L_index, colnames(G))
+    else data_LT_index <- data_L_index
+    
+    # Create all the possible ids L*T
+    names_lt <- expand.grid(rownames(Z), colnames(G))
+    names_lt <- paste0(names_lt[[1]], names_lt[[2]])
+
+    # Match Z with data observations locations
+    Z_matched <- Z[data_L_index, ]
+    Z_matched <- Matrix::Matrix(as.matrix(Z_matched))
+    
+    # Row wise multiplication Z % G
+    Bk_vec <- list()
+    for (i in 1:ncol(G)) Bk_vec[[i]] <- G[, i] * Matrix::t(Z)
+    Bk_vec <- Reduce(cbind, Bk_vec) # dimension (K x L*T)
+    colnames(Bk_vec) <- names_lt
+    Bk_vec <- Bk_vec[, data_LT_index] # Reorder columns to match the data
+    Bk_vec <- Matrix::Matrix(as.matrix(Bk_vec))
+    
+    # Matrix multiplication Z * G
+    B_vec <- Z %*% G
+    B_vec <- c(as.matrix(B_vec))
+    B_vec <- Matrix::Matrix(B_vec) # dimension (L*T x 1)
+    rownames(B_vec) <- names_lt
+    B_vec <- B_vec[data_LT_index, ] # Reorder columns to match the data
+    B_vec <- Matrix::Matrix(as.matrix(B_vec))
+    
+    list(B = B_vec, Bk = Bk_vec, Z = Z_matched)
+}
+
+bw_R_Matrix <- function(y, x, WW, weight, Z_matched, B, Bk) {
+    weightSQR = sqrt(weight)
+    
+    for (i in 1:ncol(x)) x[, i] = x[, i] * weightSQR
+    for (i in 1:ncol(y)) y[, i] = y[, i] * weightSQR
+    for (i in 1:ncol(Z_matched)) Z_matched[, i] = Z_matched[, i] * weightSQR
+    for (i in 1:ncol(WW)) WW[, i] = WW[, i] * weightSQR
+    rm(weightSQR)
+    
+    xx = x - WW %*% qr.solve(WW, x)
+    rm(x)
+    yy = y - WW %*% qr.solve(WW, y)
+    rm(y)
+    ZZ = Z_matched - WW %*% qr.solve(WW, Z_matched)
+    rm(WW)
+    
+    Zxx = Matrix::crossprod(Z_matched, xx)
+    Zyy = Matrix::crossprod(Z_matched, yy)
+    ZZZZ = Matrix::rowSums(Matrix::t(ZZ) * Matrix::t(ZZ))
+    
+    Alpha = (Bk %*% xx) / as.numeric(Matrix::crossprod(B, xx))
+    Beta = Zyy / Zxx
+    Gamma = Zyy / ZZZZ
+    pi = Matrix::crossprod(ZZ, xx) / ZZZZ
+
+    Alpha <- as.matrix(Alpha)
+    Beta <- as.matrix(Beta)
+    Gamma <- as.matrix(Gamma)
+    pi <- as.matrix(pi)
+    
+    attributes(Alpha)[["dimnames"]] <- NULL
+    attributes(Beta)[["dimnames"]] <- NULL
+    attributes(Gamma)[["dimnames"]] <- NULL
+    attributes(pi)[["dimnames"]] <- NULL
+    
+    list(Alpha, Beta, Gamma, pi)
+}
+
+bw_wrapper_Matrix <- function(master, y, x, controls = NULL, weight = NULL,
+                              local, z, global, g, L_id, T_id = NULL) {
+    # Parsing the master file
+    Y = Matrix::Matrix(as.matrix(master[y]))
+    X = Matrix::Matrix(as.matrix(master[x]))
+    n = nrow(Y)
+    
+    if (is.null(weight)) {
+      weight = Matrix::Matrix(as.matrix(rep(1, n)))
+    } else {
+      weight = Matrix::Matrix(as.matrix(master[weight]))
+    }
+    
+    if (is.null(controls)) {
+      WW = Matrix::Matrix(1, n, 1)
+    } else {
+      W = Matrix::Matrix(as.matrix(master[controls]))
+      WW = cbind(W, Matrix::Matrix(1, n, 1))
+    }
+    
+    # Match the data, local and global matrices
+    matched_matrices <- bw_matching_Matrix(master, local, global, z, g, L_id, T_id)
+    
+    Z_matched <- matched_matrices[["Z"]]
+    B <- matched_matrices[["B"]]
+    Bk <- matched_matrices[["Bk"]]
+
+    # Compute the Rotemberg weights (alpha) and the just-identified coefficients (beta)
+    alpha_beta = bw_R_Matrix(Y, X, WW, weight, Z_matched, B, Bk)
+
+    # Return a tibble
+    tibble::as_tibble(cbind(global,
+                            alpha = alpha_beta[[1]], beta = alpha_beta[[2]],
+                            gamma = alpha_beta[[3]], pi = alpha_beta[[4]])
+                      )
+}
+```
+
+Let's compare without the Matrix package.
+
+```{r}
+bench::mark(
+    "fixed" = bw_wrapper_fixed(BAR_master, y, x, controls, weight,
+                               BAR_local2, Z, BAR_global, G, L_id, T_id),
+    "Matrix" = bw_wrapper_Matrix(BAR_master, y, x, controls, weight,
+                               BAR_local2, Z, BAR_global, G, L_id, T_id),
+    iterations = 1,
+    memory = TRUE
+) %>%
+  select(expression, median, mem_alloc, n_itr, total_time)
+```
+
+It doesn't improve the computation time and the memory usage.
+
+## Last version
+
+### Last code version
+
+```{r}
+bw <- function(master, y, x, controls = NULL, weight = NULL,
+               local, z, global, g, L_id, T_id = NULL) {
+    # Parsing the master file
+    Y = as.matrix(master[y])
+    X = as.matrix(master[x])
+    n = nrow(Y)
+    
+    if (is.null(weight)) {
+      weight = as.matrix(rep(1, n))
+    } else {
+      weight = as.matrix(master[weight])
+    }
+    
+    if (is.null(controls)) {
+      WW = matrix(1, n, 1)
+    } else {
+      W = as.matrix(master[controls])
+      WW = cbind(W, matrix(1, n, 1))
+    }
+    
+    # Match the data, local and global matrices
+    matched_matrices <- match_matrices(master, local, global, z, g, L_id, T_id)
+    
+    Z_matched <- matched_matrices[["Z"]]
+    B <- matched_matrices[["B"]]
+    Bk <- matched_matrices[["Bk"]]
+
+    # Compute the coefficients by groups
+    alpha_beta = ComputeAlphaBeta(Y, X, WW, weight, Z_matched, B, Bk)
+
+    # Return a tibble
+    tibble::as_tibble(cbind(global,
+                            alpha = alpha_beta[[1]], beta = alpha_beta[[2]],
+                            gamma = alpha_beta[[3]], pi = alpha_beta[[4]])
+                      )
+}
+
+match_matrices <- function(data, local, global, z, g, L_id, T_id = NULL) {
+    stopifnot(length(g) == 1 || !is.null(T_id))
+    
+    # Create Z and G matrices
+    Z <- as.matrix(local[z])
+    G <- as.matrix(global[g])
+    
+    # Create observations ids by observation ids
+    data_L_index <- Reduce(paste0, data[L_id])
+    rownames(Z) <- Reduce(paste0, local[L_id])
+    
+    # Identify the observations in the data by ids and periods
+    if(ncol(G) == 1) data_LT_index <- paste0(data_L_index, colnames(G))
+    else data_LT_index <- data_L_index
+    
+    # Create all the possible ids L*T
+    names_lt <- expand.grid(rownames(Z), colnames(G))
+    names_lt <- paste0(names_lt[[1]], names_lt[[2]])
+
+    # Match Z with data observations locations
+    Z_matched <- Z[data_L_index, ]
+    Z_matched <- as.matrix(Z_matched)
+    
+    # Row wise multiplication Z % G
+    Bk_vec <- list()
+    for (i in 1:ncol(G)) Bk_vec[[i]] <- G[, i] * t(Z)
+    Bk_vec <- Reduce(cbind, Bk_vec) # dimension (K x L*T)
+    colnames(Bk_vec) <- names_lt
+    Bk_vec <- Bk_vec[, data_LT_index] # Reorder columns to match the data
+    Bk_vec <- as.matrix(Bk_vec)
+    
+    # Matrix multiplication Z * G
+    B_vec <- Z %*% G
+    B_vec <- as.matrix(c(B_vec)) # dimension (L*T x 1)
+    rownames(B_vec) <- names_lt
+    B_vec <- B_vec[data_LT_index, ] # Reorder columns to match the data
+    B_vec <- as.matrix(B_vec)
+    
+    list(B = B_vec, Bk = Bk_vec, Z = Z_matched)
+}
+
+ComputeAlphaBeta <- function(y, x, WW, weight, Z, B, Bk) {
+    weightSQR = sqrt(weight)
+    
+    for (i in 1:ncol(x)) x[, i] = x[, i] * weightSQR
+    for (i in 1:ncol(y)) y[, i] = y[, i] * weightSQR
+    for (i in 1:ncol(Z)) Z[, i] = Z[, i] * weightSQR
+    for (i in 1:ncol(WW)) WW[, i] = WW[, i] * weightSQR
+    for (i in 1:ncol(B)) B[, i] = B[, i] * weightSQR
+    for (i in 1:nrow(Bk)) Bk[i, ] = Bk[i, ] * weightSQR
+    rm(weightSQR)
+    
+    xx = x - WW %*% qr.solve(WW, x)
+    rm(x)
+    yy = y - WW %*% qr.solve(WW, y)
+    rm(y)
+    ZZ = Z - WW %*% qr.solve(WW, Z)
+    rm(WW)
+    
+    Zxx = crossprod(Z, xx)
+    Zyy = crossprod(Z, yy)
+    ZZZZ = rowSums(t(ZZ) * t(ZZ))
+    
+    Alpha = (Bk %*% xx) / as.numeric(crossprod(B, xx))
+    Beta = Zyy / Zxx
+    Gamma = Zyy / ZZZZ
+    pi = crossprod(ZZ, xx) / ZZZZ
+
+    attributes(Alpha)[["dimnames"]] <- NULL
+    attributes(Beta)[["dimnames"]] <- NULL
+    attributes(Gamma)[["dimnames"]] <- NULL
+    attributes(pi)[["dimnames"]] <- NULL
+    
+    list(Alpha, Beta, Gamma, pi)
+}
+```
+
+### Profile
+
+```{r}
+profvis::profvis(
+    u <- bw(BAR_master, y, x, controls, weight,
+            BAR_local2, Z, BAR_global, G, L_id, T_id)
+)
+```
+
+This code cannot be profiled with `profvis` because most of the time is spent in FORTRAN functions, which are not included in the flame graph.
+
+## Conclusion (for now)
+
+The last version of the function matches the shift-share estimates with the location and year of the main database, while the initial version didn't support multiple periods and the previous version wrongly matched it, resulting in multiple weights per observations.
+
+The different optimization allows to divide the computation time and diminish the memory needed for these computations.
 
 Avoiding the diagonal matrices and using the `solve(X, Y)` method are a big improvement when $N$ is large and save a lot of memory.
 
