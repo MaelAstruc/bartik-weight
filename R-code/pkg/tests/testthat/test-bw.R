@@ -1,3 +1,122 @@
+# Check that the matching in done right
+
+test_that("match_matrices works", {
+    # Simple data
+    # N = 3, L = 2, K = 2, T = 2
+    master <- data.frame(
+        id = c(1, 1, 2, 2, 3, 3),
+        location = paste0("location_", c(1, 1, 2, 1, 2, 2)),
+        period = paste0("period_", c(1, 2, 1, 2, 1, 2))
+    )
+
+    local <- data.frame(
+        location = paste0("location_", c(1, 2)),
+        group_1 = c(1, 2),
+        group_2 = c(3, 4)
+    )
+
+    global <- data.frame(
+        group = paste0("group_", c(1, 2)),
+        period_1 = c(1, 1),
+        period_2 = c(2, 2)
+    )
+
+    z <- c("group_1", "group_2")
+    g <- c("period_1", "period_2")
+
+    L_id <- "location"
+    T_id <- "period"
+
+    result <- match_matrices(master, local, global, z, g, L_id, T_id)
+
+    # Matrices multiplication results
+    # B <- as.matrix(c(4, 6, 8, 12))
+    # rownames(B) <- c("location_1period_1", "location_2period_1",
+    #                  "location_1period_2", "location_2period_2")
+    #
+    # Bk <- as.matrix(data.frame(
+    #     location_1period_1 = c(1, 3),
+    #     location_2period_1 = c(2, 4),
+    #     location_1period_2 = c(2, 6),
+    #     location_2period_2 = c(4, 8)
+    # ))
+    # rownames(Bk) <- c("group_1", "group_2")
+
+    # Matrices after matching
+    Z_expected <- as.matrix(data.frame(
+        group_1 = c(1, 1, 2, 1, 2, 2),
+        group_2 = c(3, 3, 4, 3, 4, 4)
+    ))
+    rownames(Z_expected) <- paste0("location_", c(1, 1, 2, 1, 2, 2))
+
+    B_expected <- as.matrix(c(4, 8, 6, 8, 6, 12))
+    rownames(B_expected) <- c("location_1period_1", "location_1period_2",
+                              "location_2period_1", "location_1period_2",
+                              "location_2period_1", "location_2period_2")
+
+    Bk_expected <- as.matrix(data.frame(
+        location_1period_1 = c(1, 3),
+        location_1period_2 = c(2, 6),
+        location_2period_1 = c(2, 4),
+        location_1period_2 = c(2, 6),
+        location_2period_1 = c(2, 4),
+        location_2period_2 = c(4, 8),
+        check.names = FALSE
+    ))
+    rownames(Bk_expected) <- c("group_1", "group_2")
+
+    expect_equal(result[["Z"]], Z_expected)
+    expect_equal(result[["B"]], B_expected)
+    expect_equal(result[["Bk"]], Bk_expected)
+})
+
+# Check that the coefficients are right
+test_that("ComputeAlphaBeta works", {
+    # Short data
+    # N = 3, L = 2, K = 2, T = 2
+    y <- as.matrix(c(1, 3, 2, 6, 3, 9))
+    x <- as.matrix(c(2, 1, 3, 7, 8, 10))
+    WW <- as.matrix(data.frame(
+        fixed = rep(1, 6),
+        control_1 = c(1, 2, 7, 2, 6, 4)
+    ))
+    weight <- as.matrix(1:6)
+
+    # The results from the previous test
+    Z <- as.matrix(data.frame(
+        group_1 = c(1, 1, 2, 1, 2, 2),
+        group_2 = c(3, 3, 4, 3, 4, 4)
+    ))
+
+    B <- as.matrix(c(4, 8, 6, 8, 6, 12))
+    rownames(B) <- c("location_1period_1", "location_1period_2",
+                              "location_2period_1", "location_1period_2",
+                              "location_2period_1", "location_2period_2")
+
+    Bk <- as.matrix(data.frame(
+        location_1period_1 = c(1, 3),
+        location_1period_2 = c(2, 6),
+        location_2period_1 = c(2, 4),
+        location_1period_2 = c(2, 6),
+        location_2period_1 = c(2, 4),
+        location_2period_2 = c(4, 8),
+        check.names = FALSE
+    ))
+
+    result <- ComputeAlphaBeta(y, x, WW, weight, Z, B, Bk)
+
+    # Expected results
+    alpha <- as.matrix(c(0.39297336, 0.60702664))
+    beta <- as.matrix(c(0.9588244, 0.9588244))
+    gamma <- as.matrix(c(8.9140083 , 8.9140083))
+    pi <- as.matrix(c(9.29681, 9.29681))
+
+    expect_equal(result[["alpha"]], alpha)
+    expect_equal(result[["beta"]], beta)
+    expect_equal(result[["gamma"]], gamma)
+    expect_equal(result[["pi"]], pi)
+})
+
 # Check that the alphas and betas are the same since @jjchern version
 
 test_that("bw still gives the same output with ADH example", {
