@@ -99,16 +99,16 @@ The dimensions of these datasets are :
 \examples{
 library(bartik.weight)
 
-index = c("czone", "year")
-y = "d_sh_empl_mfg"
-x = "d_tradeusch_pw"
-controls = c("reg_midatl", "reg_encen", "reg_wncen", "reg_satl",
+index <- c("czone", "year")
+y <- "d_sh_empl_mfg"
+x <- "d_tradeusch_pw"
+controls <- c("reg_midatl", "reg_encen", "reg_wncen", "reg_satl",
   "reg_escen", "reg_wscen", "reg_mount", "reg_pacif", "l_sh_popedu_c",
   "l_sh_popfborn", "l_sh_empl_f", "l_sh_routine33", "l_task_outsource",
   "t2", "l_shind_manuf_cbp")
-weight = "timepwt48"
-Z = setdiff(names(ADH_local_wide), index)
-G = "trade_"
+weight <- "timepwt48"
+Z <- setdiff(names(ADH_local_wide), index)
+G <- "trade_"
 
 bw(ADH_master, y, x, controls, weight,
    ADH_local_wide, Z, ADH_global, G,

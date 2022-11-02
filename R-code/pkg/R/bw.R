@@ -67,16 +67,16 @@
 #' @examples
 #' library(bartik.weight)
 #'
-#' index = c("czone", "year")
-#' y = "d_sh_empl_mfg"
-#' x = "d_tradeusch_pw"
-#' controls = c("reg_midatl", "reg_encen", "reg_wncen", "reg_satl",
+#' index <- c("czone", "year")
+#' y <- "d_sh_empl_mfg"
+#' x <- "d_tradeusch_pw"
+#' controls <- c("reg_midatl", "reg_encen", "reg_wncen", "reg_satl",
 #'   "reg_escen", "reg_wscen", "reg_mount", "reg_pacif", "l_sh_popedu_c",
 #'   "l_sh_popfborn", "l_sh_empl_f", "l_sh_routine33", "l_task_outsource",
 #'   "t2", "l_shind_manuf_cbp")
-#' weight = "timepwt48"
-#' Z = setdiff(names(ADH_local_wide), index)
-#' G = "trade_"
+#' weight <- "timepwt48"
+#' Z <- setdiff(names(ADH_local_wide), index)
+#' G <- "trade_"
 #'
 #' bw(ADH_master, y, x, controls, weight,
 #'    ADH_local_wide, Z, ADH_global, G,
@@ -85,21 +85,21 @@
 bw <- function(master, y, x, controls = NULL, weight = NULL,
               local, z, global, g, L_id, T_id = NULL) {
     # Parsing the master file
-    Y = as.matrix(master[y])
-    X = as.matrix(master[x])
-    n = nrow(Y)
+    Y <- as.matrix(master[y])
+    X <- as.matrix(master[x])
+    n <- nrow(Y)
 
     if (is.null(weight)) {
-        weight = as.matrix(rep(1, n))
+        weight <- as.matrix(rep(1, n))
     } else {
-        weight = as.matrix(master[weight])
+        weight <- as.matrix(master[weight])
     }
 
     if (is.null(controls)) {
-        WW = matrix(1, n, 1)
+        WW <- matrix(1, n, 1)
     } else {
-        W = as.matrix(master[controls])
-        WW = cbind(W, matrix(1, n, 1))
+        W <- as.matrix(master[controls])
+        WW <- cbind(W, matrix(1, n, 1))
     }
 
     # Match the data, local and global matrices
@@ -110,12 +110,13 @@ bw <- function(master, y, x, controls = NULL, weight = NULL,
     Bk <- matched_matrices[["Bk"]]
 
     # Compute the coefficients by groups
-    alpha_beta = ComputeAlphaBeta(Y, X, WW, weight, Z_matched, B, Bk)
+    coeffs <- ComputeAlphaBeta(Y, X, WW, weight, Z_matched, B, Bk)
 
     # Return a tibble
-    tibble::as_tibble(cbind(global,
-                            alpha = alpha_beta[[1]], beta = alpha_beta[[2]],
-                            gamma = alpha_beta[[3]], pi = alpha_beta[[4]])
+    tibble::as_tibble(cbind(
+        global,
+        alpha = coeffs[["alpha"]], beta = coeffs[['beta']],
+        gamma = coeffs[["gamma"]], pi = coeffs[['pi']])
     )
 }
 
@@ -166,36 +167,36 @@ match_matrices <- function(data, local, global, z, g, L_id, T_id = NULL) {
 }
 
 ComputeAlphaBeta <- function(y, x, WW, weight, Z, B, Bk) {
-    weightSQR = sqrt(weight)
+    weightSQR <- sqrt(weight)
 
-    for (i in 1:ncol(x)) x[, i] = x[, i] * weightSQR
-    for (i in 1:ncol(y)) y[, i] = y[, i] * weightSQR
-    for (i in 1:ncol(Z)) Z[, i] = Z[, i] * weightSQR
-    for (i in 1:ncol(WW)) WW[, i] = WW[, i] * weightSQR
-    for (i in 1:ncol(B)) B[, i] = B[, i] * weightSQR
-    for (i in 1:nrow(Bk)) Bk[i, ] = Bk[i, ] * weightSQR
+    for (i in 1:ncol(x)) x[, i] <- x[, i] * weightSQR
+    for (i in 1:ncol(y)) y[, i] <- y[, i] * weightSQR
+    for (i in 1:ncol(Z)) Z[, i] <- Z[, i] * weightSQR
+    for (i in 1:ncol(WW)) WW[, i] <- WW[, i] * weightSQR
+    for (i in 1:ncol(B)) B[, i] <- B[, i] * weightSQR
+    for (i in 1:nrow(Bk)) Bk[i, ] <- Bk[i, ] * weightSQR
     rm(weightSQR)
 
-    xx = x - WW %*% qr.solve(WW, x)
+    xx <- x - WW %*% qr.solve(WW, x)
     rm(x)
-    yy = y - WW %*% qr.solve(WW, y)
+    yy <- y - WW %*% qr.solve(WW, y)
     rm(y)
-    ZZ = Z - WW %*% qr.solve(WW, Z)
+    ZZ <- Z - WW %*% qr.solve(WW, Z)
     rm(WW)
 
-    Zxx = crossprod(Z, xx)
-    Zyy = crossprod(Z, yy)
-    ZZZZ = rowSums(t(ZZ) * t(ZZ))
+    Zxx <- crossprod(Z, xx)
+    Zyy <- crossprod(Z, yy)
+    ZZZZ <- rowSums(t(ZZ) * t(ZZ))
 
-    Alpha = (Bk %*% xx) / as.numeric(crossprod(B, xx))
-    Beta = Zyy / Zxx
-    Gamma = Zyy / ZZZZ
-    pi = crossprod(ZZ, xx) / ZZZZ
+    Alpha <- (Bk %*% xx) / as.numeric(crossprod(B, xx))
+    Beta <- Zyy / Zxx
+    Gamma <- Zyy / ZZZZ
+    pi <- crossprod(ZZ, xx) / ZZZZ
 
     attributes(Alpha)[["dimnames"]] <- NULL
     attributes(Beta)[["dimnames"]] <- NULL
     attributes(Gamma)[["dimnames"]] <- NULL
     attributes(pi)[["dimnames"]] <- NULL
 
-    list(Alpha, Beta, Gamma, pi)
+    list(alpha = Alpha, beta = Beta, gamma = Gamma, pi = pi)
 }
