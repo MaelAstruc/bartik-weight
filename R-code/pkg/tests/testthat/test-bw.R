@@ -111,10 +111,10 @@ test_that("ComputeAlphaBeta works", {
     gamma <- as.matrix(c(8.9140083 , 8.9140083))
     pi <- as.matrix(c(9.29681, 9.29681))
 
-    expect_equal(result[["alpha"]], alpha)
-    expect_equal(result[["beta"]], beta)
-    expect_equal(result[["gamma"]], gamma)
-    expect_equal(result[["pi"]], pi)
+    expect_equal(result[[1]], alpha)
+    expect_equal(result[[2]], beta)
+    expect_equal(result[[3]], gamma)
+    expect_equal(result[[4]], pi)
 })
 
 # Check that the alphas and betas are the same since @jjchern version

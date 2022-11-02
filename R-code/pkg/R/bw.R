@@ -63,6 +63,8 @@
 #' }
 #'
 #' @importFrom tibble as_tibble
+#' @importFrom Rcpp sourceCpp
+#' @useDynLib bartik.weight, .registration = TRUE
 #'
 #' @examples
 #' library(bartik.weight)
@@ -115,8 +117,8 @@ bw <- function(master, y, x, controls = NULL, weight = NULL,
     # Return a tibble
     tibble::as_tibble(cbind(
         global,
-        alpha = coeffs[["alpha"]], beta = coeffs[['beta']],
-        gamma = coeffs[["gamma"]], pi = coeffs[['pi']])
+        alpha = coeffs[[1]], beta = coeffs[[2]],
+        gamma = coeffs[[3]], pi = coeffs[[4]])
     )
 }
 
@@ -164,39 +166,4 @@ match_matrices <- function(data, local, global, z, g, L_id, T_id = NULL) {
     B_vec <- as.matrix(B_vec)
 
     list(B = B_vec, Bk = Bk_vec, Z = Z_matched)
-}
-
-ComputeAlphaBeta <- function(y, x, WW, weight, Z, B, Bk) {
-    weightSQR <- sqrt(weight)
-
-    for (i in 1:ncol(x)) x[, i] <- x[, i] * weightSQR
-    for (i in 1:ncol(y)) y[, i] <- y[, i] * weightSQR
-    for (i in 1:ncol(Z)) Z[, i] <- Z[, i] * weightSQR
-    for (i in 1:ncol(WW)) WW[, i] <- WW[, i] * weightSQR
-    for (i in 1:ncol(B)) B[, i] <- B[, i] * weightSQR
-    for (i in 1:nrow(Bk)) Bk[i, ] <- Bk[i, ] * weightSQR
-    rm(weightSQR)
-
-    xx <- x - WW %*% qr.solve(WW, x)
-    rm(x)
-    yy <- y - WW %*% qr.solve(WW, y)
-    rm(y)
-    ZZ <- Z - WW %*% qr.solve(WW, Z)
-    rm(WW)
-
-    Zxx <- crossprod(Z, xx)
-    Zyy <- crossprod(Z, yy)
-    ZZZZ <- rowSums(t(ZZ) * t(ZZ))
-
-    Alpha <- (Bk %*% xx) / as.numeric(crossprod(B, xx))
-    Beta <- Zyy / Zxx
-    Gamma <- Zyy / ZZZZ
-    pi <- crossprod(ZZ, xx) / ZZZZ
-
-    attributes(Alpha)[["dimnames"]] <- NULL
-    attributes(Beta)[["dimnames"]] <- NULL
-    attributes(Gamma)[["dimnames"]] <- NULL
-    attributes(pi)[["dimnames"]] <- NULL
-
-    list(alpha = Alpha, beta = Beta, gamma = Gamma, pi = pi)
 }

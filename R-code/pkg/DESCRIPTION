@@ -10,7 +10,9 @@ Encoding: UTF-8
 LazyData: true
 LazyDataCompression: gzip
 Depends: R (>= 3.5.0)
-Imports: tibble
+Imports: 
+    Rcpp,
+    tibble
 URL: https://github.com/jjchern/bartik.weight
 BugReports: https://github.com/jjchern/bartik.weight/issues
 RoxygenNote: 7.2.1
@@ -20,3 +22,6 @@ Suggests:
     testthat (>= 3.0.0),
     tidyr
 Config/testthat/edition: 3
+LinkingTo: 
+    Rcpp,
+    RcppArmadillo
