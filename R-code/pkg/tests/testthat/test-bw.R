@@ -44,26 +44,47 @@ test_that("match_matrices works", {
 
     # Matrices after matching
     Z_expected <- as.matrix(data.frame(
-        group_1 = c(1, 1, 2, 1, 2, 2),
-        group_2 = c(3, 3, 4, 3, 4, 4)
+        group_1_period_1 = c(1, 0, 2, 0, 2, 0),
+        group_2_period_1 = c(3, 0, 4, 0, 4, 0),
+        group_1_period_2 = c(0, 1, 0, 1, 0, 2),
+        group_2_period_2 = c(0, 3, 0, 3, 0, 4)
     ))
-    rownames(Z_expected) <- paste0("location_", c(1, 1, 2, 1, 2, 2))
+
+    rownames(Z_expected) <- c(
+        "location_1_period_1",
+        "location_1_period_2",
+        "location_2_period_1",
+        "location_1_period_2",
+        "location_2_period_1",
+        "location_2_period_2"
+    )
 
     B_expected <- as.matrix(c(4, 8, 6, 8, 6, 12))
-    rownames(B_expected) <- c("location_1period_1", "location_1period_2",
-                              "location_2period_1", "location_1period_2",
-                              "location_2period_1", "location_2period_2")
+    rownames(B_expected) <- c(
+        "location_1_period_1",
+        "location_1_period_2",
+        "location_2_period_1",
+        "location_1_period_2",
+        "location_2_period_1",
+        "location_2_period_2"
+    )
 
     Bk_expected <- as.matrix(data.frame(
-        location_1period_1 = c(1, 3),
-        location_1period_2 = c(2, 6),
-        location_2period_1 = c(2, 4),
-        location_1period_2 = c(2, 6),
-        location_2period_1 = c(2, 4),
-        location_2period_2 = c(4, 8),
+        location_1_period_1 = c(1, 3, 0, 0),
+        location_1_period_2 = c(0, 0, 2, 6),
+        location_2_period_1 = c(2, 4, 0, 0),
+        location_1_period_2 = c(0, 0, 2, 6),
+        location_2_period_1 = c(2, 4, 0, 0),
+        location_2_period_2 = c(0, 0, 4, 8),
         check.names = FALSE
     ))
-    rownames(Bk_expected) <- c("group_1", "group_2")
+
+    rownames(Bk_expected) <- c(
+        "group_1_period_1",
+        "group_2_period_1",
+        "group_1_period_2",
+        "group_2_period_2"
+    )
 
     expect_equal(result[["Z"]], Z_expected)
     expect_equal(result[["B"]], B_expected)

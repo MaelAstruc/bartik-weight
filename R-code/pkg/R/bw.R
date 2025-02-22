@@ -122,48 +122,82 @@ bw <- function(master, y, x, controls = NULL, weight = NULL,
     )
 }
 
-match_matrices <- function(data, local, global, z, g, L_id, T_id = NULL) {
+paste_ <- function(...) {
+    paste(..., sep = "_")
+}
+
+match_matrices <- function(master, local, global, z, g, L_id, T_id = NULL) {
     stopifnot(length(g) == 1 || !is.null(T_id))
+
+    # Create list of ids for the data
+    master_l <- Reduce(paste_, master[L_id])
+    master_t <- Reduce(paste_, master[T_id])
+    master_lt <- Reduce(paste_, master[c(L_id, T_id)])
 
     # Create Z and G matrices
     Z <- as.matrix(local[z])
     G <- as.matrix(global[g])
 
-    # Create locations ids by observation
-    data_L_index <- Reduce(paste0, data[L_id])
-    rownames(Z) <- Reduce(paste0, local[L_id])
+    # Use row name to identify locations
+    rownames(Z) <- Reduce(paste_, local[L_id])
 
-    # Identify the observations in the data by ids and periods
-    data_T_index <- Reduce(paste0, data[T_id])
-    if(ncol(G) == 1) data_LT_index <- paste0(data_L_index, colnames(G))
-    else data_LT_index <- paste0(data_L_index, data_T_index)
+    # Reduce Z and G
+    Z <- Z[rownames(Z) %in% master_l, ]
+    if (!is.null(T_id)) G <- G[, colnames(G) %in% master_t]
 
-    # In case these are numeric
-    data_L_index <- as.character(data_L_index)
-    data_LT_index <- as.character(data_LT_index)
+    # Create lists of id for the instrument
+    names_l <- rownames(Z)
+    names_k <- colnames(Z)
 
-    # Create all the possible ids L*T
-    names_lt <- expand.grid(rownames(Z), colnames(G))
-    names_lt <- paste0(names_lt[[1]], names_lt[[2]])
+    if (is.null(T_id)) {
+        names_lt <- names_l
+        names_kt <- names_k
+    } else {
+        names_t <- colnames(G)
+        names_lt <- expand.grid(names_l, names_t)
+        names_lt <- Reduce(paste_, names_lt)
+        names_kt <- expand.grid(names_k, names_t)
+        names_kt <- Reduce(paste_, names_kt)
+    }
 
-    # Match Z with data observations locations
-    Z_matched <- Z[data_L_index, ]
-    Z_matched <- as.matrix(Z_matched)
+    # In case of panel data Z is (L*T x T*K) with 0 when T does not match
+    Z_T <- matrix(
+        data = 0,
+        nrow = nrow(Z) * ncol(G),
+        ncol = ncol(Z) * ncol(G),
+        dimnames = list(names_lt, names_kt)
+    )
+
+    for (t in 1:ncol(G)) {
+        start_row <- (t - 1) * nrow(Z) + 1
+        end_row <- t * nrow(Z)
+        start_col <- (t - 1) * ncol(Z) + 1
+        end_col <- t * ncol(Z)
+
+        Z_T[start_row:end_row, start_col:end_col] <- Z
+    }
+
+    # Same for G
+    G_T <- c(G)
+    names(G_T) <- names_kt
+
+    # Match Z with the data
+    Z_matched <- Z_T[master_lt, ]
+
+    # Normal Bartik
+    B <- Z %*% G
+    B <- as.matrix(c(B)) # dimension (L*T x 1)
+    rownames(B) <- names_lt
+    B <- B[master_lt, ] # Reorder rows to match the data
+    B <- as.matrix(B)
 
     # Row wise multiplication Z % G
-    Bk_vec <- list()
-    for (i in 1:ncol(G)) Bk_vec[[i]] <- G[, i] * t(Z)
-    Bk_vec <- Reduce(cbind, Bk_vec) # dimension (K x L*T)
-    colnames(Bk_vec) <- names_lt
-    Bk_vec <- Bk_vec[, data_LT_index] # Reorder columns to match the data
-    Bk_vec <- as.matrix(Bk_vec)
+    Bk <- matrix(nrow = nrow(Z_T), ncol = ncol(Z_T), dimnames = dimnames(Z_T))
 
-    # Matrix multiplication Z * G
-    B_vec <- Z %*% G
-    B_vec <- as.matrix(c(B_vec)) # dimension (L*T x 1)
-    rownames(B_vec) <- names_lt
-    B_vec <- B_vec[data_LT_index, ] # Reorder columns to match the data
-    B_vec <- as.matrix(B_vec)
+    for (kt in names(G_T)) Bk[, kt] <- G_T[kt] * Z_T[, kt]
 
-    list(B = B_vec, Bk = Bk_vec, Z = Z_matched)
+    Bk <- t(Bk)
+    Bk <- Bk[, master_lt] # Reorder columns to match the data
+
+    return(list(B = B, Bk = Bk, Z = Z_matched))
 }
