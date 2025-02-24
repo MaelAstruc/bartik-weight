@@ -35,5 +35,15 @@ List ComputeAlphaBeta(arma::vec y, arma::vec x, arma::mat WW, arma::mat weight,
     arma::mat Gamma = Zyy / ZZZZ;
     arma::mat pi = (ZZ.t() * xx) / ZZZZ;
 
-    return List::create(Alpha, Beta, Gamma, pi);
+    // Compute residuals per group
+    arma::mat res = arma::mat(yy.n_rows, Beta.n_rows);
+    for (unsigned int i = 0; i < Beta.n_rows; i++) res.col(i) = yy.col(0) - as_scalar(Beta.row(i)) * xx;
+
+    // Prepare matrices to retrieve diagonals
+    arma::mat res_2 = res.t() * res;
+    arma::mat xzx = Zxx * Zxx.t();
+
+    arma::mat se = sqrt(res_2.diag() / xzx.diag() / (double) (x.n_rows -  x.n_cols));
+
+    return List::create(Alpha, Beta, Gamma, pi, se);
 }

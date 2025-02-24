@@ -118,8 +118,9 @@ bw <- function(master, y, x, controls = NULL, weight = NULL,
     tibble::as_tibble(cbind(
         global,
         alpha = coeffs[[1]], beta = coeffs[[2]],
-        gamma = coeffs[[3]], pi = coeffs[[4]])
-    )
+        gamma = coeffs[[3]], pi = coeffs[[4]],
+        se    = coeffs[[5]]
+    ))
 }
 
 paste_ <- function(...) {
