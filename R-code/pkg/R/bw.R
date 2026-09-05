@@ -114,12 +114,15 @@ bw <- function(master, y, x, controls = NULL, weight = NULL,
     # Compute the coefficients by groups
     coeffs <- ComputeAlphaBeta(Y, X, WW, weight, Z_matched, B, Bk)
 
+    # print(coeffs[[7]])
+    # print(coeffs[[8]])
+
     # Return a tibble
     tibble::as_tibble(cbind(
         global,
         alpha = coeffs[[1]], beta = coeffs[[2]],
-        gamma = coeffs[[3]], pi = coeffs[[4]],
-        se    = coeffs[[5]]
+        gamma = coeffs[[3]], pi   = coeffs[[4]],
+        se    = coeffs[[5]], f1   = coeffs[[6]]
     ))
 }
 

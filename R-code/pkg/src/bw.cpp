@@ -35,15 +35,25 @@ List ComputeAlphaBeta(arma::vec y, arma::vec x, arma::mat WW, arma::mat weight,
     arma::mat Gamma = Zyy / ZZZZ;
     arma::mat pi = (ZZ.t() * xx) / ZZZZ;
 
-    // Compute residuals per group
-    arma::mat res = arma::mat(yy.n_rows, Beta.n_rows);
-    for (unsigned int i = 0; i < Beta.n_rows; i++) res.col(i) = yy.col(0) - as_scalar(Beta.row(i)) * xx;
+    // Compute reduced form residuals per group
+    arma::mat res_0 = arma::mat(yy.n_rows, Beta.n_rows);
+    for (unsigned int i = 0; i < Beta.n_rows; i++) res_0.col(i) = yy.col(0) - as_scalar(Beta.row(i)) * xx;
+
+    // Compute first-stage residuals per group
+    arma::mat res_1 = arma::mat(xx.n_rows, pi.n_rows);
+    for (unsigned int i = 0; i < pi.n_rows; i++) res_1.col(i) = xx.col(0) - as_scalar(pi.row(i)) * ZZ.col(i);
 
     // Prepare matrices to retrieve diagonals
-    arma::mat res_2 = res.t() * res;
-    arma::mat xzx = Zxx * Zxx.t();
+    arma::mat res_0_2 = res_0.t() * res_0;
+    arma::mat res_1_2 = res_1.t() * res_1;
+    arma::mat xzzx = Zxx * Zxx.t();
+    arma::mat zz = ZZ.t() * ZZ;
+    arma::mat pi_2 = pi * pi.t();
 
-    arma::mat se = sqrt(res_2.diag() / xzx.diag() / (double) (x.n_rows -  x.n_cols));
+    arma::mat se_0 = sqrt(res_0_2.diag() / xzzx.diag() / (double) (xx.n_rows -  xx.n_cols));
+    arma::mat se_1 = res_1_2.diag() / zz.diag() / (double) (ZZ.n_rows - ZZ.n_cols);
 
-    return List::create(Alpha, Beta, Gamma, pi, se);
+    arma::mat f1 = pi_2.diag() / se_1;
+
+    return List::create(Alpha, Beta, Gamma, pi, se_0, f1, pi_2, se_1);
 }
